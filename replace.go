@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/dlclark/regexp2/syntax"
+	"github.com/admpub/regexp2/syntax"
 )
 
 const (

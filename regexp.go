@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dlclark/regexp2/syntax"
+	"github.com/admpub/regexp2/syntax"
 )
 
 // Default timeout used when running regexp matches -- "forever"
