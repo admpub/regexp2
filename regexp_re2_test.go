@@ -1,6 +1,8 @@
 package regexp2
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestRE2CompatCapture(t *testing.T) {
 	r := MustCompile(`re(?P<a>2)`, RE2)
@@ -96,3 +98,126 @@ func TestRE2NamedAscii_Concat(t *testing.T) {
 		t.Fatal("Expected match")
 	}
 }
+
+func TestRE2Dollar_Singleline(t *testing.T) {
+	// PCRE allows for \n after the $ and RE2 doesn't
+	r := MustCompile(`^ac$\n`, RE2)
+	if m, _ := r.MatchString("ac"); m {
+		t.Fatal("Expected no match")
+	}
+	if m, _ := r.MatchString("ac\n"); m {
+		t.Fatal("Expected no match")
+	}
+}
+
+func TestRE2Dollar_Multiline(t *testing.T) {
+	r := MustCompile(`^ac$\n`, RE2|Multiline)
+	if m, _ := r.MatchString("ac"); m {
+		t.Fatal("Expected no match")
+	}
+	if m, err := r.MatchString("ac\n"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+}
+
+func TestRE2ExtendedZero(t *testing.T) {
+	notZero := "߀" // \u07c0
+	r := MustCompile(`^\d$`, RE2)
+	if m, _ := r.MatchString(notZero); m {
+		t.Fatal("Expected no match")
+	}
+
+	r = MustCompile(`^\D$`, RE2)
+	if m, _ := r.MatchString(notZero); !m {
+		t.Fatal("Expected match")
+	}
+}
+
+func TestRegularExtendedZero(t *testing.T) {
+	notZero := "߀" // \u07c0
+
+	r := MustCompile(`^\d$`, 0)
+	if m, _ := r.MatchString(notZero); !m {
+		t.Fatal("Expected match")
+	}
+
+	r = MustCompile(`^\D$`, 0)
+	if m, _ := r.MatchString(notZero); m {
+		t.Fatal("Expected no match")
+	}
+}
+
+func TestRE2Word(t *testing.T) {
+	r := MustCompile(`\w`, RE2)
+	if m, _ := r.MatchString("å"); m {
+		t.Fatal("Expected no match")
+	}
+
+	r = MustCompile(`\W`, RE2)
+	if m, _ := r.MatchString("å"); !m {
+		t.Fatal("Expected match")
+	}
+
+}
+
+func TestRegularWord(t *testing.T) {
+	r := MustCompile(`\w`, 0)
+	if m, _ := r.MatchString("å"); !m {
+		t.Fatal("Expected match")
+	}
+	r = MustCompile(`\W`, 0)
+	if m, _ := r.MatchString("å"); m {
+		t.Fatal("Expected no match")
+	}
+}
+
+func TestRE2Space(t *testing.T) {
+	r := MustCompile(`\s`, RE2)
+	if m, _ := r.MatchString("\x0b"); m {
+		t.Fatal("Expected no match")
+	}
+	r = MustCompile(`\S`, RE2)
+	if m, _ := r.MatchString("\x0b"); !m {
+		t.Fatal("Expected match")
+	}
+}
+
+func TestRegularSpace(t *testing.T) {
+	r := MustCompile(`\s`, 0)
+	if m, _ := r.MatchString("\x0b"); !m {
+		t.Fatal("Expected match")
+	}
+	r = MustCompile(`\S`, 0)
+	if m, _ := r.MatchString("\x0b"); m {
+		t.Fatal("Expected no match")
+	}
+}
+
+func TestEscapeLiteralDefaults(t *testing.T) {
+	_, err := Compile(`a\_test`, 0)
+	if err == nil {
+		t.Fatal("Expected compile fail")
+	}
+
+	r := MustCompile(`a\_test`, RE2)
+	if m, _ := r.MatchString("a_test"); !m {
+		t.Fatal("Expected match")
+	}
+	if m, _ := r.MatchString("a\\_test"); m {
+		t.Fatal("Expected no match")
+	}
+}
+
+/*
+func TestRE2EndZ_Singleline(t *testing.T) {
+	// PCRE allows for \n after the $ and RE2 doesn't
+	r := MustCompile(`^ac$\Z`, RE2|Debug)
+	if m, _ := r.MatchString("ac"); m {
+		t.Fatal("Expected no match")
+	}
+	if m, _ := r.MatchString("ac\n"); m {
+		t.Fatal("Expected no match")
+	}
+}*/

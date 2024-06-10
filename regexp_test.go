@@ -1,6 +1,8 @@
 package regexp2
 
 import (
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,14 +13,43 @@ import (
 
 func TestBacktrack_CatastrophicTimeout(t *testing.T) {
 	r, err := Compile("(.+)*\\?", 0)
-	r.MatchTimeout = time.Millisecond * 1
-	t.Logf("code dump: %v", r.code.Dump())
-	m, err := r.FindStringMatch("Do you think you found the problem string!")
-	if err == nil {
-		t.Errorf("expected timeout err")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if m != nil {
-		t.Errorf("Expected no match")
+	t.Logf("code dump: %v", r.code.Dump())
+	const subject = "Do you think you found the problem string!"
+
+	const earlyAllowance = 10 * time.Millisecond
+	var lateAllowance = clockPeriod + 500*time.Millisecond // Large allowance in case machine is slow
+
+	for _, timeout := range []time.Duration{
+		-1 * time.Millisecond,
+		0 * time.Millisecond,
+		1 * time.Millisecond,
+		10 * time.Millisecond,
+		100 * time.Millisecond,
+		500 * time.Millisecond,
+		1000 * time.Millisecond,
+	} {
+		t.Run(fmt.Sprint(timeout), func(t *testing.T) {
+			r.MatchTimeout = timeout
+			start := time.Now()
+			m, err := r.FindStringMatch(subject)
+			elapsed := time.Since(start)
+			if err == nil {
+				t.Errorf("expected timeout err")
+			}
+			if m != nil {
+				t.Errorf("Expected no match")
+			}
+			t.Logf("timeed out after %v", elapsed)
+			if elapsed < timeout-earlyAllowance {
+				t.Errorf("Match timed out too quickly (%v instead of expected %v)", elapsed, timeout-earlyAllowance)
+			}
+			if elapsed > timeout+lateAllowance {
+				t.Errorf("Match timed out too late (%v instead of expected %v)", elapsed, timeout+lateAllowance)
+			}
+		})
 	}
 }
 
@@ -605,7 +636,7 @@ func TestHexadecimalCurlyBraces(t *testing.T) {
 	}
 
 	re = MustCompile(`\x{0010ffff}`, 0)
-	if m, err := re.MatchString(string(0x10ffff)); err != nil {
+	if m, err := re.MatchString(string(rune(0x10ffff))); err != nil {
 		t.Fatalf("Unexpected err: %v", err)
 	} else if !m {
 		t.Fatalf("Expected match")
@@ -717,6 +748,159 @@ func TestECMAOctal(t *testing.T) {
 	} else if !m {
 		t.Fatal("Expected match")
 	}
+
+	if m, err := re.MatchString("x"); err != nil {
+		t.Fatal(err)
+	} else if m {
+		t.Fatal("Expected no match")
+	}
+
+	re = MustCompile(`\377`, ECMAScript)
+	if m, err := re.MatchString("\u00ff"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+
+	re = MustCompile(`\400`, ECMAScript)
+	if m, err := re.MatchString(" 0"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+
+}
+
+func TestECMAInvalidEscape(t *testing.T) {
+	re := MustCompile(`\x0`, ECMAScript)
+	if m, err := re.MatchString("x0"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+
+	re = MustCompile(`\x0z`, ECMAScript)
+	if m, err := re.MatchString("x0z"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+}
+
+func TestECMANamedGroup(t *testing.T) {
+	re := MustCompile(`\k`, ECMAScript)
+	if m, err := re.MatchString("k"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+
+	re = MustCompile(`\k'test'`, ECMAScript)
+	if m, err := re.MatchString(`k'test'`); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+
+	re = MustCompile(`\k<test>`, ECMAScript)
+	if m, err := re.MatchString(`k<test>`); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+
+	_, err := Compile(`(?<title>\w+), yes \k'title'`, ECMAScript)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+
+	re = MustCompile(`(?<title>\w+), yes \k<title>`, ECMAScript)
+	if m, err := re.MatchString("sir, yes sir"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+
+	re = MustCompile(`\k<title>, yes (?<title>\w+)`, ECMAScript)
+	if m, err := re.MatchString(", yes sir"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+
+	_, err = Compile(`\k<(?<name>)>`, ECMAScript)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+
+	MustCompile(`\k<(<name>)>`, ECMAScript)
+
+	_, err = Compile(`\k<(<name>)>`, 0)
+	if err == nil {
+		t.Fatal("Expected error")
+	}
+
+	re = MustCompile(`\'|\<?`, 0)
+	if m, err := re.MatchString("'"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+	if m, err := re.MatchString("<"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+}
+
+func TestECMAInvalidEscapeCharClass(t *testing.T) {
+	re := MustCompile(`[\x0]`, ECMAScript)
+	if m, err := re.MatchString("x"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+
+	if m, err := re.MatchString("0"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+
+	if m, err := re.MatchString("z"); err != nil {
+		t.Fatal(err)
+	} else if m {
+		t.Fatal("Expected no match")
+	}
+}
+
+func TestECMAScriptXCurlyBraceEscape(t *testing.T) {
+	re := MustCompile(`\x{20}`, ECMAScript)
+	if m, err := re.MatchString(" "); err != nil {
+		t.Fatal(err)
+	} else if m {
+		t.Fatal("Expected no match")
+	}
+
+	if m, err := re.MatchString("xxxxxxxxxxxxxxxxxxxx"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+}
+
+func TestEcmaScriptUnicodeRange(t *testing.T) {
+	r, err := Compile(`([\u{001a}-\u{ffff}]+)`, ECMAScript|Unicode)
+	if err != nil {
+		panic(err)
+	}
+	m, err := r.FindStringMatch("qqqq")
+	if err != nil {
+		panic(err)
+	}
+	if m == nil {
+		t.Fatal("Expected non-nil, got nil")
+	}
 }
 
 func TestNegateRange(t *testing.T) {
@@ -734,6 +918,25 @@ func TestECMANegateRange(t *testing.T) {
 		t.Fatal(err)
 	} else if !m {
 		t.Fatal("Expected match")
+	}
+}
+
+func TestDollar(t *testing.T) {
+	// PCRE/C# allow \n to match to $ at end-of-string in singleline mode...
+	// a weird edge-case kept for compatibility, ECMAScript/RE2 mode don't allow it
+	re := MustCompile(`ac$`, 0)
+	if m, err := re.MatchString("ac\n"); err != nil {
+		t.Fatal(err)
+	} else if !m {
+		t.Fatal("Expected match")
+	}
+}
+func TestECMADollar(t *testing.T) {
+	re := MustCompile(`ac$`, ECMAScript)
+	if m, err := re.MatchString("ac\n"); err != nil {
+		t.Fatal(err)
+	} else if m {
+		t.Fatal("Expected no match")
 	}
 }
 
@@ -856,6 +1059,17 @@ func TestAlternationConstruct_Matches(t *testing.T) {
 	}
 }
 
+func TestStartAtEnd(t *testing.T) {
+	re := MustCompile("(?:)", 0)
+	m, err := re.FindStringMatchStartingAt("t", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m == nil {
+		t.Fatal("Expected match")
+	}
+}
+
 func TestParserFuzzCrashes(t *testing.T) {
 	var crashes = []string{
 		"(?'-", "(\\c0)", "(\\00(?())", "[\\p{0}", "(\x00?.*.()?(()?)?)*.x\xcb?&(\\s\x80)", "\\p{0}", "[0-[\\p{0}",
@@ -953,5 +1167,200 @@ func TestBadGroupConstruct(t *testing.T) {
 		if err == nil {
 			t.Fatalf("Wanted error, but got no error for pattern: %v", b)
 		}
+	}
+}
+
+func TestEmptyCaptureLargeRepeat(t *testing.T) {
+	// a bug would cause our track to not grow and eventually panic
+	// with large numbers of repeats of a non-capturing group (>16)
+
+	// the issue was that the jump occured to the same statement over and over
+	// and the "grow stack/track" logic only triggered on jumps that moved
+	// backwards
+
+	r := MustCompile(`(?:){40}`, 0)
+	m, err := r.FindStringMatch("1")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if want, got := 0, m.Index; want != got {
+		t.Errorf("First Match Index wanted %v got %v", want, got)
+	}
+	if want, got := 0, m.Length; want != got {
+		t.Errorf("First Match Length wanted %v got %v", want, got)
+	}
+
+	m, _ = r.FindNextMatch(m)
+	if want, got := 1, m.Index; want != got {
+		t.Errorf("Second Match Index wanted %v got %v", want, got)
+	}
+	if want, got := 0, m.Length; want != got {
+		t.Errorf("Second Match Length wanted %v got %v", want, got)
+	}
+
+	m, _ = r.FindNextMatch(m)
+	if m != nil {
+		t.Fatal("Expected 2 matches, got more")
+	}
+}
+
+func TestFuzzBytes_NoCompile(t *testing.T) {
+	//some crash cases found from fuzzing
+
+	var testCases = []struct {
+		r []byte
+	}{
+		{
+			r: []byte{0x28, 0x28, 0x29, 0x5c, 0x37, 0x28, 0x3f, 0x28, 0x29, 0x29},
+		},
+		{
+			r: []byte{0x28, 0x5c, 0x32, 0x28, 0x3f, 0x28, 0x30, 0x29, 0x29},
+		},
+		{
+			r: []byte{0x28, 0x3f, 0x28, 0x29, 0x29, 0x5c, 0x31, 0x30, 0x28, 0x3f, 0x28, 0x30, 0x29},
+		},
+		{
+			r: []byte{0x28, 0x29, 0x28, 0x28, 0x29, 0x5c, 0x37, 0x28, 0x3f, 0x28, 0x29, 0x29},
+		},
+	}
+
+	for _, c := range testCases {
+		r := string(c.r)
+		t.Run(r, func(t *testing.T) {
+			_, err := Compile(r, Multiline|ECMAScript|Debug)
+			// should fail compiling
+			if err == nil {
+				t.Fatal("should fail compile, but didn't")
+			}
+		})
+	}
+
+}
+
+func TestFuzzBytes_Match(t *testing.T) {
+
+	var testCases = []struct {
+		r, s []byte
+	}{
+		{
+			r: []byte{0x30, 0xbf, 0x30, 0x2a, 0x30, 0x30},
+			s: []byte{0xf0, 0xb0, 0x80, 0x91, 0xf7},
+		},
+		{
+			r: []byte{0x30, 0xaf, 0xf3, 0x30, 0x2a},
+			s: []byte{0xf3, 0x80, 0x80, 0x87, 0x80, 0x89},
+		},
+	}
+
+	for _, c := range testCases {
+		r := string(c.r)
+		t.Run(r, func(t *testing.T) {
+			re, err := Compile(r, 0)
+
+			if err != nil {
+				t.Fatal("should compile, but didn't")
+			}
+
+			re.MatchString(string(c.s))
+		})
+	}
+}
+
+func TestConcatAccidentalPatternCharge(t *testing.T) {
+	// originally this pattern would parse incorrectly
+	// specifically the closing group would concat the string literals
+	// together but the raw rune slice would blow over the original pattern
+	// so the final bit of pattern parsing would be wrong
+	// fixed in #49
+	r, err := Compile(`(?<=1234\.\*56).*(?=890)`, 0)
+
+	if err != nil {
+		panic(err)
+	}
+
+	m, err := r.FindStringMatch(`1234.*567890`)
+	if err != nil {
+		panic(err)
+	}
+	if m == nil {
+		t.Fatal("Expected non-nil, got nil")
+	}
+}
+
+func TestGoodReverseOrderMessage(t *testing.T) {
+	_, err := Compile(`[h-c]`, ECMAScript)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	expected := "error parsing regexp: [h-c] range in reverse order in `[h-c]`"
+	if err.Error() != expected {
+		t.Fatalf("expected %q got %q", expected, err.Error())
+	}
+}
+
+func TestParseShortSlashP(t *testing.T) {
+	re := MustCompile(`[!\pL\pN]{1,}`, 0)
+	m, err := re.FindStringMatch("this23! is a! test 1a 2b")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if m.String() != "this23!" {
+		t.Fatalf("Expected match")
+	}
+}
+
+func TestParseShortSlashNegateP(t *testing.T) {
+	re := MustCompile(`\PNa`, 0)
+	m, err := re.FindStringMatch("this is a test 1a 2b")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if m.String() != " a" {
+		t.Fatalf("Expected match")
+	}
+}
+
+func TestParseShortSlashPEnd(t *testing.T) {
+	re := MustCompile(`\pN`, 0)
+	m, err := re.FindStringMatch("this is a test 1a 2b")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if m.String() != "1" {
+		t.Fatalf("Expected match")
+	}
+}
+
+func TestMarshal(t *testing.T) {
+	re := MustCompile(`.*`, 0)
+	m, err := json.Marshal(re)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if string(m) != `".*"` {
+		t.Fatalf(`Expected ".*"`)
+	}
+}
+
+func TestUnMarshal(t *testing.T) {
+	DefaultUnmarshalOptions = IgnoreCase
+	bytes := []byte(`"^[abc]"`)
+	var re *Regexp
+	err := json.Unmarshal(bytes, &re)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if re.options != IgnoreCase {
+		t.Fatalf("Expected options ignore case")
+	}
+	if re.String() != `^[abc]` {
+		t.Fatalf(`Expected "^[abc]"`)
+	}
+	ok, err := re.MatchString("A")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatalf(`Expected match`)
 	}
 }
